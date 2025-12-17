@@ -1,0 +1,5 @@
+services:
+  chrome:
+      build: .
+      ports:
+        - "9222:9222"
