@@ -1,62 +1,64 @@
 const http = require('http');
 const httpProxy = require('http-proxy');
 const axios = require('axios');
+const url = require('url');
 
-const TARGET_PORT = 9223; // Port réel de Chromium
-const PROXY_PORT = 9222;  // Port exposé vers l'extérieur
+const TARGET = 'http://127.0.0.1:9223';
+const PROXY_PORT = 9222;
+const AUTH_TOKEN = process.env.CHROME_TOKEN || 'chrome_token'; // 'chrome_token' par défaut
 
-const proxy = httpProxy.createProxyServer({ 
-    target: { host: '127.0.0.1', port: TARGET_PORT }, 
-    ws: true 
-});
+const proxy = httpProxy.createProxyServer({ target: TARGET, ws: true });
 
-// Serveur pour les requêtes HTTP (ex: /json/list)
 const server = http.createServer((req, res) => {
     console.log(`[HTTP] ${req.method} ${req.url}`);
-    proxy.web(req, res, (err) => {
-        console.error(`[HTTP ERROR] ${err.message}`);
-        res.writeHead(502);
-        res.end("Chromium n'est pas prêt.");
-    });
+    proxy.web(req, res);
 });
 
-// Gestion des WebSockets (CDP)
 server.on('upgrade', async (req, socket, head) => {
-    console.log(`[WS] Requête entrante sur : ${req.url}`);
+    const parsedUrl = url.parse(req.url, true);
+    const path = parsedUrl.pathname;
+    const token = parsedUrl.query.token;
 
-    if (req.url === '/chrome') {
+    console.log(`\n[WS] Handshake sur: ${path}`);
+
+    if (path === '/chrome') {
+        // --- VÉRIFICATION DU TOKEN ---
+        if (token !== AUTH_TOKEN) {
+            console.error(`[AUTH ERROR] Token invalide ou manquant : "${token}"`);
+            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+            socket.destroy();
+            return;
+        }
+
         try {
-            console.log(`[DEBUG] Récupération de l'ID de session via http://127.0.0.1:${TARGET_PORT}/json/version...`);
-            const response = await axios.get(`http://127.0.0.1:${TARGET_PORT}/json/version`);
+            console.log(`[AUTH SUCCESS] Token valide. Recherche de l'ID interne...`);
+            const { data } = await axios.get(`${TARGET}/json/version`);
+            const internalWsUrl = data.webSocketDebuggerUrl;
+            const dynamicPath = new URL(internalWsUrl).pathname;
             
-            const wsUrl = response.data.webSocketDebuggerUrl;
-            // Extrait l'identifiant unique (/devtools/browser/...)
-            const dynamicPath = wsUrl.replace(`ws://127.0.0.1:${TARGET_PORT}`, '');
+            console.log(`[DEBUG] Redirection: /chrome -> ${dynamicPath}`);
             
-            console.log(`[DEBUG] URL Dynamique trouvée : ${dynamicPath}`);
-            console.log(`[WS] Redirection : /chrome -> ${dynamicPath}`);
-
             req.url = dynamicPath;
             proxy.ws(req, socket, head);
-        } catch (e) {
-            console.error(`[ERROR] Impossible de joindre Chromium : ${e.message}`);
+        } catch (err) {
+            console.error(`[CRITICAL] Chromium injoignable: ${err.message}`);
             socket.destroy();
         }
     } else {
-        // Pour les autres chemins (si Playwright essaie l'URL directe)
-        console.log(`[WS] Proxy direct pour : ${req.url}`);
-        proxy.ws(req, socket, head);
+        // On bloque aussi les accès directs aux chemins internes sans token 
+        // pour forcer le passage par /chrome?token=...
+        console.warn(`[BLOCK] Accès direct refusé sur : ${path}`);
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
     }
 });
 
-// Gestion des erreurs globale sur le proxy
-proxy.on('error', (err, req, res) => {
-    console.error(`[PROXY ERROR] : ${err.message}`);
-});
+proxy.on('error', (err) => console.error(`[PROXY ERROR] ${err.message}`));
 
 server.listen(PROXY_PORT, '0.0.0.0', () => {
-    console.log(`--------------------------------------------------`);
-    console.log(`🚀 Proxy CDP Statique démarré sur le port ${PROXY_PORT}`);
-    console.log(`🔗 URL statique : ws://localhost:${PROXY_PORT}/chrome`);
-    console.log(`--------------------------------------------------`);
+    console.log(`================================================`);
+    console.log(`🚀 Proxy Sécurisé actif sur le port ${PROXY_PORT}`);
+    console.log(`🔑 Token requis : ${AUTH_TOKEN}`);
+    console.log(`📍 URL : ws://localhost:${PROXY_PORT}/chrome?token=${AUTH_TOKEN}`);
+    console.log(`================================================`);
 });
