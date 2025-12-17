@@ -17,6 +17,8 @@ WORKDIR /app
 RUN npm install axios http-proxy
 COPY proxy.js .
 
+ENV CHROME_TOKEN=chrome_token
+
 # Exposer le port CDP
 EXPOSE 9222
 
