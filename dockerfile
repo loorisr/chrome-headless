@@ -18,17 +18,9 @@ RUN npm install axios http-proxy
 COPY proxy.js .
 
 ENV CHROME_TOKEN=chrome_token
+ENV IDLE_TIMEOUT=60
 
 # Exposer le port CDP
 EXPOSE 9222
 
-CMD chromium-browser \
-    --headless \
-    --no-sandbox \
-    --disable-gpu \
-    --disable-dev-shm-usage \
-    --remote-debugging-port=9223 \
-    --remote-debugging-address=127.0.0.1 \
-    --disable-dbus \
-    --allowed-origins=* \
-    & node proxy.js
+CMD ["node", "proxy.js"]
